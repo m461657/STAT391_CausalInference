@@ -1,0 +1,412 @@
+---
+title: "Using Propensity Score Methods When Treatment is Rare"
+subtitle: "STAT 391: Special Topics in Statistics/Biostatistics"
+author: "Megan Willis"
+date: "05/18/2021"
+output: 
+  html_document:
+    theme: readable
+    toc: true
+    toc_float: true
+    code_download: true
+---
+# Introduction
+
+For this assignment, I really wanted to explore propensity score matching more. I am fascinated by propensity score matching in general, and was curious to see what else I could find out about it. However, I knew that just focusing on propensity score matching would be way to broad, and that I definitely needed to find something more specific. I was searching for papers on propensity scores, and came across one paper on using propensity score methods for rare exposure/treatment.
+
+Since I took a class on Epidemiology this semester, I have spent a lot of time analyzing papers, pinpointing the exposure and outcomes of interest, and focusing on study design. I decided I wanted to look more into the statistics-side of these papers. They all mention the statistical findings, and although I was able to interpret most of them, and understood what the authors were trying to get across, it wasn't a focus of the class. This is why I decided to concentrate on the use of propensity score methods for rare treatment, since many observational studies don't have the ability to ensure that the distribution of treatment and no-treatment is balanced.
+
+To start off, I think it would be helpful to review what propensity scores actually are, and then go through an example of propensity score matching, before moving on to a simulated example of two different propensity score methods.
+
+# Review of Propensity Scores: Matching Example
+
+## Review: Propensity Scores
+
+Propensity score methods were originally developed by Donald Rubin in the 1970's. A propensity score is defined as the probability of receiving treatment, conditional on confounding variables.
+
+They are used to achieve conditional exchangeability between the exposed and unexposed groups, also known as no unmeasured confounding, which is extremely important in causal inference! 
+
+Propensity scores can be calculated using a logistic regression function.
+
+If two observations both had a propensity score of 0.75, regardless of their actual treatment assignment, both observations had a 75% chance of being assigned treatment. If one is assigned treatment and the other is assigned no treatment, it is completely random, and has nothing to do with the other covariates. 
+
+## Review: Example of Matching on Propensity Scores 
+
+Now we can go through an example using propensity score matching to estimate the average treatment effect on the treated (ATT), for a dataset with `treat` as the treatment variable, and `cont_out` as the outcome. 
+
+In the data, there are covariates `x1`, `x2`, `x3`, `x4`, and `x5`.
+
+We will use the `MatchIt` package, as well as load any other packages we will need:
+```{r, warning = FALSE, message = FALSE}
+library(MatchIt)
+library(tidyverse)
+library(broom)
+library(readr)
+library(mnormt)
+```
+
+Read in the data for the example:
+```{r}
+ps_data = read.csv("ps_data.csv")
+```
+
+We are going to remove the `bin_out` variable (binary outcome variable), and rename `cont_out` to `outcome`. This will be our outcome variable.
+```{r}
+ps_data = ps_data %>% 
+  rename(outcome = cont_out) %>% 
+  select(treat, x1, x2, x3, x4, x5, outcome)
+```
+
+In the `ps_data` dataset:
+
+| outcome: `outcome`
+| exposure/treatment: `treat`
+
+
+Let's calculate propensity scores using `glm()`, and add them as an attribute in the data:
+```{r}
+pscore_model = glm(treat ~ x1 + x2 + x3 + x4 + x5 , family = "binomial", data = ps_data)
+
+ps_data$pscore = fitted(pscore_model)
+```
+
+Let's match on p-scores. We will be using the nearest-neighbor matching method, with one match per observation.
+```{r}
+pscore_match = matchit(treat ~ x1 + x2 + x3 + x4 + x5 ,
+                               data = ps_data, 
+                               method = "nearest", 
+                               distance = "logit",
+                               replace = TRUE)
+pscore_match
+```
+
+Using `summary()`, we can see the changes in covariate balance after matching on propensity scores.
+```{r}
+summary(pscore_match)
+```
+By comparing the standardized mean difference (Std. Mean Diff) for all the data to the matched data, we can see that matching was effective. The values after matching are less than abs(0.20), which indicates a good balance among the covariates.
+
+Check to see some of the matches:
+```{r}
+head(pscore_match$match.matrix)
+```
+We can see that the observation in row 1 was matched with the observation in row 829, etc.
+
+Generate matched data:
+```{r}
+matched_data = match.data(pscore_match)
+```
+
+Compare the distribution across treatment levels of covariate `x1` before, and after matching: 
+```{r}
+ps_data %>% 
+  ggplot(aes(x = x1, fill = factor(treat)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "x1: before matching")
+
+matched_data %>% 
+  ggplot(aes(x = x1, fill = factor(treat)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "x1: after matching")
+```
+
+Fit a regression model using the `matched_data` to estimate the ATT:
+```{r}
+matched_reg = lm(outcome ~ treat, 
+                         weights = weights, 
+                         data = matched_data)
+tidy(matched_reg)
+```
+ATT = 1.253
+
+After matching on all the covariates, `treat` caused a 1.253 increase in `outcome`. 
+
+Of course, this example is arbitrary, as we don't know what `treat`, `outcome`, or any of the other covariates are. But these are the basic steps to take to perform propensity score matching, and I thought it will be helpful to go through this example before comparing different propensity score methods on data where treatment/exposure is rare.
+
+# Overall Stregths and Weaknesses of Propensity Score Methods 
+[Strengths and Weaknesses of P-score Methods][1]
+
+While I was searching for some more general information on propensity score methods, I did come across a source that outlined some of the strengths and weaknesses of propensity score methods that are important to consider. 
+
+## Strengths of P-Score Methods
+
+- Uses one score instead of multiple covariates
+  - This makes it much easier to use dozens of different covariates, which is why propensity         score methods are so popular in medical sciences
+- Can be used for categorical and numeric variables
+- Since the outcome isn't included in the calculation of the p-scores, there won't be any bias in   regards to assignment of treatment and outcome that occured
+- p-values are relied on less (that's a whole other story...)
+- Don't need to know the causes of the outcome to create exchangeability
+
+## Weaknesses
+
+- Only controls for **measured** covariates
+- Overlap between treated and untreated must be substantial enough to ensure appropriate matches
+- Matching on observed covariates could open any backdoors resulting in the bias of unobserved     covariates
+- Large samples!!
+- Doesn't work with missing data
+  - Missing data = missing p-scores
+- Doesn't take into account clustering
+- Discards any unmatched data!
+  - This will be important later...
+
+# Using Propensity Score Methods for Rare Treatment
+[Propensity Score Based Stratification for Rare Exposure][2]
+
+I found a paper that explored the use of propensity score based stratification to adjust for confounding when the exposure is infrequent. I found this topic extremely interesting, and wanted to base my final paper on it!
+
+The paper states that typically, propensity score matching results in reduced precision when the exposure is rare because it discards a large proportion of the unexposed patients. However, they acknowledge that the use of propensity score stratification hasn't been formally tested in this same circumstance. 
+
+I want to first point out that it is logical that matching would result in reduced precision, because one weakness of propensity score matching is that any unmatched observations are discarded from the matched dataset.  
+
+The paper describes rare exposure/treatment to be anything less than 5% of the observations in the data. The paper concluded that in these special cases, propensity score stratification resulted in smaller relative bias, as well as greater precision in comparison to matching. I will work through an example of both propensity score matching and stratification on simulated data to fit this case in a little bit.
+
+# What is Stratification?
+[Stratification][3]
+
+Stratification on the propensity score essentially organizes subjects into mutually exclusive subsets, or groups, based on their estimated propensity scores. 
+
+One common way to do this is to divide the subjects into 5 equal groups (stratas) of the propensity scores. This has been shown to eliminate 90% of the bias due to **measured** confounders. The effect of treatment on the outcome within each strata can then be compared directly, and stratum-specific treatment effects can be used to calculate an overall treatment effect estimate (by multiplying each estimate by 1/k, and summing them).
+
+Stratification in general is a new topic for me, but it doesn't seem too difficult, and definitely something that I am interested in! So I decided to look for some R-code to perform propensity score stratification, and I worked through the same dataset as above on my own to see how it worked, so I could use it on some simulated data!
+
+# Simulated Example
+
+## Simulated Data With Rare Treatment (<5%)
+
+In the following code, I am creating simulated data with 3 covariates, a treatment (1 or 0), and outcome. The percent of the data to receive treatment is 3%, so it is considered "rare".
+```{r, warning = FALSE}
+set.seed(11)
+
+mu1 <- as.matrix(c(0.5, 0, 0)) # Generate vector of means for each covariate (TREATMENT 1)
+mu2 <- as.matrix(c(0, 0.5, 0)) # Toggle the 0.5 higher for more variability in treatments;
+                               # Replacing the 0.5s with 0 gives essentially an RCT
+
+cov1 <- matrix(0, nrow = 3, ncol = 3); diag(cov1) <- 1 # Generate covariance matrix (TREATMENT 1)
+cov2 <- matrix(0, nrow = 3, ncol = 3); diag(cov2) <- 1
+
+covariates_treat = rmnorm(n = 150, mean = mu1, varcov = cov1)
+covariates_notreat = rmnorm(n = 4850, mean = mu2, varcov = cov2)
+
+# The covariates will be called 'X1', 'X2', and 'X3' by default
+data_sim = data.frame(rbind(covariates_treat, covariates_notreat))
+data_sim$treatment = c(rep(1, 150), rep(0, 4850))
+
+data_sim %>%
+  ggplot(aes(x = X1, fill = factor(treatment))) +
+  geom_density(alpha = 0.4)
+```
+In the density plot above, you can see that the two groups (treated and untreated) overlap, so matching would typically be a good choice for this data, to try and get the two groups to be more balanced. Common support is also satisfied. 
+
+Next, we will add `outcome` as a function of all the covariates to the data, `data_sim`:
+```{r}
+set.seed(11)
+
+data_sim = data_sim %>%
+  mutate(b1 = runif(5000, -5, 5), 
+         b2 = runif(5000, -3, 3),
+         b3 = runif(5000, 0, 2),
+         error = rnorm(5000, 0, 1), 
+         outcome = X1*b1 + X2*b2 + X3*b3 + error) 
+```
+
+Now that we have our simulated data, we can perform propensity score matching just as we did in the example above, and then perform propensity score stratification. We will compare the results of both methods to see which one works best for rare treatment!
+
+## Perform Propensity Score Matching on Simulated Data with Rare Treatment (3%)
+
+First, we will calculate propensity scores for the data, and add it as a column in the dataset:
+```{r}
+ps_sim_model = glm(treatment ~ X1 + X2 + X3,
+                   family = "binomial",
+                   data = data_sim,
+                   maxit = 100)
+
+data_sim$pscore = fitted(ps_sim_model)
+```
+
+Let's match on p-scores now (using nearest-neighbor matching):
+```{r}
+ps_sim_match = matchit(treatment ~ X1 + X2 + X3,
+                               data = data_sim, 
+                               method = "nearest", 
+                               distance = "logit",
+                               replace = TRUE)
+ps_sim_match
+```
+Now, we can view the summary of the matched model, to see how it performed. Are the covariates balanced? How many matches were made?
+```{r}
+summary(ps_sim_match)
+```
+Notice that the Std. Mean Diff. on the matched data was less than the abs(0.20), so matching worked!
+
+As we did before, we can view a few rows of the data, and the rows that they were matched to. 
+```{r}
+head(ps_sim_match$match.matrix)
+```
+
+Next, generate matched data:
+```{r}
+matched_data_sim = match.data(ps_sim_match)
+```
+
+As we did before, we could use a linear regression model to estimate the average treatment effect on treated (ATT). However, because this data is simulated, we will skip that step for this example.
+
+## Perform Propensity Score Stratification Next
+
+Now, it's time to carry out propensity score stratification on the same simulated data. I got all the code for stratification [here][4].
+
+First, we need to cut the propensity scores that we calculated into 5 strata, using the 5 quantiles as the break points.
+
+Here are the quantiles for `pscore`:
+```{r}
+summary(data_sim$pscore)
+```
+
+Now, we will save the 5 quantiles of the `pscore` as a new variable, `sub_class`, for each of the 5000 observations:
+```{r}
+data_sim$sub_class = cut(x=data_sim$pscore,
+                              breaks=quantile(data_sim$pscore, 
+                              prob = seq(0, 1, 1/5))
+                          ,include.lowest=T)
+```
+
+Rename the strata levels (`sub_class`), so they are more meaningful:
+```{r}
+levels(data_sim$sub_class) <- 1:length(levels(data_sim$sub_class))
+```
+
+Check for common support:
+```{r}
+xtabs(~treatment+sub_class, data_sim)
+```
+
+Now, we will use `matchit()`, with `method = "subclass"` to execute p-score stratification (as opposed to regular p-score matching).
+
+The function also takes in `distance` and `sub.by` parameters.
+```{r, warning = FALSE}
+sim_strat <- matchit(treatment ~ X1 + X2 + X3, distance = data_sim$pscore,
+                          data = data_sim, 
+                          method = "subclass", sub.by = "treat", sub_class=5)
+```
+
+Now, like we did for the regular propensity score matching, we can view the summary of the `matchit` model to see how it did! We ask the same questions as before; is it balanced, how many matches were made, etc.
+```{r}
+summary(sim_strat)
+```
+
+We then create a "matched-dataset", and view the distribution of treatment in the different subclasses.
+```{r}
+data.strat <- match.data(sim_strat)
+
+data.strat$treatment <- factor(data.strat$treatment, levels=c(0,1),
+                                   labels=c("Untreated","Treated"))
+data.strat$sub_class <- factor(data.strat$sub_class)
+xtabs(~treatment+sub_class, data.strat)
+```
+
+# Conclusion
+
+Comparing the two different methods, both resulted in covariate balance. We know this because the standardized mean differences for all the different covariates for **both** propensity score matching, and propensity score based stratification, was less than |0.20|. However, for regular propensity score matching, because the percent of the data that received treatment was only 3%, the resulting matched data was only 293 observations. Remember, the initial dataset was 5000 observations. There was a significant amount of unexposed/not-treated observations lost, exactly how the paper described happens using propensity score matching for rare treatment.
+
+The resulting size of the data for propensity score stratification, however, was still 5000 observations. Because the covariates were balanced within the strata, which in turn allows for average treatment effects across strata to be calculated, no data was lost in the process. Because of this, it is clear to see why propensity score based stratification is the ideal propensity score method when treatment assignment is rare (less than 5%).
+
+Here are the counts of the resulting data after performing p-score matching and stratification:
+```{r}
+matched_data_sim %>% 
+  count()
+
+data.strat %>% 
+  count()
+```
+For the matching data, which stated out with 5000 observations, now only has 293. That is about a 90% decrease in the dimension of the data! Howver, with stratification, the data still consisted of 5000 observations. So, as I mentioned previously, one major weakness of matching in general is that any unmatched data is thrown away. Because of this alone, I think it is safe to say that stratification is better when treatment is rare.
+
+But, we can examine some more plots to compare the covariate balance before and after each method.
+
+Here is the Love Plot for the propensity score matching example. 
+**Note**: ignore `distance`, as it is not one of the covariates
+```{r}
+#p-score matching
+plot(summary(ps_sim_match))
+```
+
+Now, here is the Love Plot for the propensity score stratification:
+```{r}
+#p-score stratification
+plot(summary(sim_strat))
+```
+
+While both methods resulted in a decreased standardized mean difference (with the exception of `X3`, which increased on both), stratification resulted in a **slightly more decreased** std. mean diff.
+
+We can view the balance of the covariates among the treated and not treated using density plots as well.
+
+Here are density plots for each covariate (`X1`, `X2`, and `X3`) before any method was performed:
+```{r}
+data_sim %>% 
+  ggplot(aes(x = X1, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "Balance of X1 before any p-score methods applied")
+
+data_sim %>% 
+  ggplot(aes(x = X2, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "Balance of X2 before any p-score methods applied")
+
+data_sim %>% 
+  ggplot(aes(x = X3, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "Balance of X3 before any p-score methods applied")
+```
+
+Now, we can compare the balance after propensity score matching:
+```{r}
+matched_data_sim %>% 
+  ggplot(aes(x = X1, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "X1: after p-score matching")
+
+matched_data_sim %>% 
+  ggplot(aes(x = X2, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "X2: after p-score matching")
+
+matched_data_sim %>% 
+  ggplot(aes(x = X3, fill = factor(treatment)))+
+  geom_density(alpha = 0.4)+
+  labs(title = "X3: after p-score matching")
+```
+
+...and after propensity score stratification (balance is within the different strata):
+```{r}
+data.strat %>% 
+  ggplot(aes(x = X1, fill = factor(treatment)))+
+  facet_wrap(~ sub_class)+
+  geom_density(alpha = 0.4)+
+  labs(title = "X1: after p-score stratification")
+
+data.strat %>% 
+  ggplot(aes(x = X2, fill = factor(treatment)))+
+  facet_wrap(~ sub_class)+
+  geom_density(alpha = 0.4)+
+  labs(title = "X2: after p-score stratification")
+
+data.strat %>% 
+  ggplot(aes(x = X3, fill = factor(treatment)))+
+  facet_wrap(~ sub_class)+
+  geom_density(alpha = 0.4)+
+  labs(title = "X3: after p-score stratification")
+```
+
+Statistically speaking, both propensity score methods reduced the standardized mean difference of the covariates. Graphically, although it is slightly harder to tell, the covariate balance could have been better. I attribute this to the fact that this data was simulated, and completely arbitrary. It is important to note that there is a possibility that **neither** of these methods are best for this data!
+
+That being said, I still think that propensity score based stratification is the better method (compared to matching) when treatment is rare, based on the preservation of data in that method. This simulated example supports the findings in the paper that I read because it "saved" the data, as opposed to discarding all the unmatched data.
+
+Going forward, I would love to dive deeper into propensity score stratification, and how you can make estimates of treatment effect by averaging the estimates across strata. I think it's a super interesting topic, with so many applications, and look forward to learning more about it and all of it's uses in the future. I would also like to explore more methods for balancing covariates when treatment is rare, since I know this isn't the only one, and may not even be the best one!
+
+
+[1]: https://www.publichealth.columbia.edu/research/population-health-methods/propensity-score-analysis "Propensity Score Analysis"
+
+[2]: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5497217/
+
+[3]: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3144483/ 
+
+[4]: http://www.practicalpropensityscore.com/uploads/9/4/5/3/94532409/chapter4_part_2_-_propensity_score_stratification.r
+
