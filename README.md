@@ -1,2 +1,2 @@
-# p_scores
-Final paper for Causal Inference course, investigating different propensity score methods in the case when the occurence of treatment is rare.
+# Causal_Inference
+Projects and papers in Causal Inference course.
